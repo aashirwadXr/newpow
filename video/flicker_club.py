@@ -152,15 +152,43 @@ def eye(p, x, y, r, ring=None, look=(0.25, 0.1)):
         p.chalk(p.ellipse_pts(x, y, r + 5, r + 5, 20), ring, 3.5, closed=True)
 
 
+MOUTHS = []          # mouths are not baked into the base: they are redrawn every frame
+
+
 def mouth(p, x, y, w, h, gums=True):
-    p.rect(x, y, x + w, y + h, CHALK, tex=6, rough_amt=1.2, density=0.3)
-    if gums:
-        p.rect(x, y, x + w, y + h * 0.28, RED, tex=10, rough_amt=0.8, density=0.3)
-    n = max(3, int(w / 7))
-    for i in range(1, n):
-        xx = x + w * i / n
-        p.chalk([(xx, y + h * 0.3), (xx, y + h)], INK, 1.6, passes=1, amt=0.4)
-    p.chalk([(x, y + h * 0.62), (x + w, y + h * 0.62)], INK, 1.4, passes=1, amt=0.5)
+    MOUTHS.append((x, y, w, h))
+
+
+def draw_mouth(p, x, y, w, h):
+    """Two rows of pointy white teeth on red gums. Called once per frame with a
+    different seed, so every tooth changes shape / position a little (the 'boil')."""
+    j = lambda a=1.2: rng.uniform(-a, a)
+    gum_h = h * 0.38
+    dy = j(0.8)
+    # dark mouth gap (keeps the face black between the gums)
+    p.paint([(x - 2, y), (x + w + 2, y), (x + w + 2, y + h), (x - 2, y + h)], INK, tex=4,
+            rough_amt=1.0, density=0.1)
+    upper = [(x + j(), y + dy + j()), (x + w + j(), y + dy + j()),
+             (x + w + j(), y + dy + gum_h + j()), (x + j(), y + dy + gum_h + j())]
+    lower = [(x + 3 + j(), y + dy + h - gum_h + j()), (x + w - 3 + j(), y + dy + h - gum_h + j()),
+             (x + w - 3 + j(), y + dy + h + j()), (x + 3 + j(), y + dy + h + j())]
+    p.paint(upper, RED, tex=16, rough_amt=1.4, density=0.5)
+    p.paint(lower, RED, tex=16, rough_amt=1.4, density=0.5)
+    n = max(3, int(w / 9))
+    tw = w / n
+    for row in (0, 1):
+        for i in range(n):
+            cx = x + tw * (i + 0.5) + j(1.6)
+            size = tw * rng.uniform(0.32, 0.5)
+            if row == 0:               # upper teeth point down
+                base_y = y + dy + gum_h * 0.35 + j(0.8)
+                tri = [(cx - size, base_y), (cx + size, base_y),
+                       (cx + j(1.5), base_y + gum_h * rng.uniform(0.75, 1.15))]
+            else:                      # lower teeth point up
+                base_y = y + dy + h - gum_h * 0.35 + j(0.8)
+                tri = [(cx - size, base_y), (cx + size, base_y),
+                       (cx + j(1.5), base_y - gum_h * rng.uniform(0.75, 1.15))]
+            p.paint(tri, CHALK, tex=6, rough_amt=0.7, density=0.2)
 
 
 def head(p, cx, cy, r, look=(0.25, 0.1), ring=None, hair=None, mouth_w=None):
@@ -404,11 +432,27 @@ def paint_scene():
         else:
             p.chalk([(x, y), (x + rng.uniform(15, 35), y + rng.uniform(-4, 4))], c, 3, passes=1)
 
-    img = p.img.resize((W, H), Image.LANCZOS)
+    return p
+
+
+def finish(img_2x):
+    img = img_2x.resize((W, H), Image.LANCZOS)
     # slight paper grain baked into the base
     arr = np.asarray(img).astype(np.float32)
     grain = np.random.default_rng(1).normal(0, 6, (H, W, 1))
     return Image.fromarray(np.clip(arr + grain, 0, 255).astype(np.uint8))
+
+
+def frame_with_mouths(base_painter, k):
+    """Copy the static painting and redraw every mouth with a per-frame seed."""
+    global rng
+    fp = Painter()
+    fp.img = base_painter.img.copy()
+    fp.d = ImageDraw.Draw(fp.img)
+    rng = random.Random(900 + k)
+    for m in MOUTHS:
+        draw_mouth(fp, *m)
+    return finish(fp.img)
 
 
 # ---------------------------------------------------------------- the flicker grade
@@ -444,9 +488,11 @@ def grade(base, g, seed):
 
 
 def main():
-    base = paint_scene()
+    base_p = paint_scene()
+    bases = [frame_with_mouths(base_p, k) for k in range(len(GRADES))]
+    base = bases[0]
     base.save(os.path.join(OUT_DIR, "flicker_club_still.png"))
-    frames = [grade(base, g, 100 + i) for i, g in enumerate(GRADES)]
+    frames = [grade(bases[i], g, 100 + i) for i, g in enumerate(GRADES)]
 
     gif = os.path.join(OUT_DIR, "flicker_club.gif")
     small = [f.resize((720, 720), Image.LANCZOS).quantize(colors=200, method=Image.Quantize.MEDIANCUT)
